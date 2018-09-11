@@ -2,7 +2,7 @@
 
 Passenger only supports a few programming languages right now. "Generic language support" — **"GLS"** — is what we call the effort to make Passenger support *all* programming languages. This document describes what the goal should look like (mostly from a UX point of view) and how we'll get there (the implementation strategy).
 
-This document is meant for Passenger developers/contributors in order to get feedback on whether the UX is desirable and whether the implementation strategy is viable. But we welcome the public to comment as well, especially about the rationale and UX parts.
+This document is meant for Passenger developers and contributors in order to get feedback on whether the UX is desirable and whether the implementation strategy is viable. But we welcome the public to comment as well, especially about the rationale and UX parts.
 
 <!-- TOC depthFrom:2 depthTo:4 -->
 
@@ -25,9 +25,11 @@ This document is meant for Passenger developers/contributors in order to get fee
 - [4. Implementation direction](#4-implementation-direction)
     - [4.1. Setting the SpawningKit config](#41-setting-the-spawningkit-config)
     - [4.2. How user config and autodetected values flow](#42-how-user-config-and-autodetected-values-flow)
-    - [4.3. New config options](#43-new-config-options)
-    - [Standalone::AppFinder](#standaloneappfinder)
-    - [4.4. Testing checklist](#44-testing-checklist)
+    - [4.3. How to access the `app_start_command` value from `setConfigFromAppPoolOptions()`](#43-how-to-access-the-app_start_command-value-from-setconfigfromapppooloptions)
+    - [4.4. How to access `app_supports_kuria_protocol` from `setConfigFromAppPoolOptions()`](#44-how-to-access-app_supports_kuria_protocol-from-setconfigfromapppooloptions)
+    - [4.5. New config options](#45-new-config-options)
+    - [4.6. Standalone::AppFinder](#46-standaloneappfinder)
+    - [4.7. Testing checklist](#47-testing-checklist)
 - [5. Future work: extensions for more auto-supported apps](#5-future-work-extensions-for-more-auto-supported-apps)
     - [5.1. Anatomy of an extension](#51-anatomy-of-an-extension)
     - [5.2. Where to look for extensions](#52-where-to-look-for-extensions)
@@ -40,13 +42,16 @@ This document is meant for Passenger developers/contributors in order to get fee
 
 ## 1. Why GLS?
 
-Application delivery and DevOps are too hard. They shouldn't be. Passenger's goal is to improve this by rethinking the experience into something simpler and happier.
+Application delivery and DevOps are too hard. They shouldn't be. Passenger's goal is to improve this, by rethinking this into a simpler experience that is a joy to use and that allows teams to move faster.
 
-We started out with Ruby and slowly moved to cover Python and Node.js too. But with microservices and containers, the world is becoming increasingly polyglot. We see that every language reinvents tooling and duplicates efforts. The quality and usability also varies wildly.
+We started out with Ruby and slowly moved to cover Python and Node.js as well. But with microservices and containers, the world is becoming increasingly polyglot. We see that every language reinvents tooling and duplicates efforts. Not only is this a waste, it is also so that the quality and usability of such efforts vary wildly.
 
-Today Passenger helps more than 650.000 websites world-wide, such as Apple, Pixar and Intercom. But why stop here? With GLS, we want to bring the benefits of Passenger into the hands of more people. More importantly, we envision that Passenger brings _standardization_, which allows teams to move faster and with more confidence. One tool to rule them all.
+Today Passenger helps more than 650.000 websites world-wide, such as Apple, Pixar and Intercom. But why stop here? The GLS effort is the first step towards:
 
-> How could GLS benefit you? What use cases could we solve for you? Post a comment and let us know!
+ * Bringing the benefits of Passenger into the hands of more people. We envision that Passenger brings _standardization_, which allows teams to move faster and with more confidence. One tool to rule them all.
+ - Rethinking Passenger's concept to address tomorrow's needs.
+
+   > **How could GLS benefit you?** What use cases could we help you with? Post a comment and let us know!
 
 ## 2. What is GLS and how to get there?
 
@@ -56,6 +61,7 @@ TLDR:
  * This rewrite contains all the low-level machinery needed to spawn apps written in any language.
  * The rest of Passenger doesn't care what language an apps is written in, as long as they can communicate with the app.
  * So to implement GLS, we "simply" need to connect the rest of Passenger with the new machinery.
+ * In order to save time and release earlier, we're not going to expose all low-level machinery yet. We'll push out some of the less-important work to future releases.
 
 But of course, the devil is in the details. For example, how we write the connections depends on the UX implications.
 
@@ -276,7 +282,7 @@ The 3 approaches listed in "Summary of spawning approaches" correspond to the fo
 | Kuria          | genericApp = false,<br> startsUsingWrapper = false,<br> appType irrelevant,<br> startupFile irrelevant,<br> startCommand = (something) |
 | Auto-supported | genericApp = false,<br> startsUsingWrapper = true,<br> appType = (ruby,python,nodejs),<br> startupFile = (something),<br> startCommand = (path to wrapper) |
 
-Passenger currently only configures SpawningKit to use the auto-supported approach. We need to set the SpawningKit config as follows:
+Passenger currently only configures SpawningKit to use the auto-supported approach. We should set the SpawningKit config as follows:
 
  * If Passengerfile.json sets `app_supports_kuria_protocol`, then:
     - Ensure `genericApp = false`
@@ -291,11 +297,14 @@ Where do we set the SpawningKit config? And since we need to know the values of 
 
 ### 4.2. How user config and autodetected values flow
 
+Before we describe how to access `app_supports_kuria_protocol` and `app_start_command`, let's step back and take a look at how other values flow into the place where the SpawningKit config is set.
+
 `appType` and `startupFile` are set either based on user-provided config, or are autodetected, through this flow:
 
-<a href="SpawningKit%20config%20flow.png">![SpawningKit config flow](https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true)</a>
+<!-- <a href="https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true">![SpawningKit config flow](https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true)</a> -->
+<a href="https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true">![SpawningKit config flow](SpawningKit%20config%20flow.png)</a>
 
-`startCommand` is set based on `appType` and the **wrapper registry**. The wrapper registry is a hard-coded in-memory database which maps an app type name to various information, such as the name of the corresponding wrapper. The value is calculated in `ApplicationPool2::Options::getStartCommand()`.
+`startCommand` is set based on `appType` and the **wrapper registry**. The wrapper registry is a hard-coded in-memory database which maps an app type name to various information, such as the name of the corresponding wrapper. The `startCommand` value is calculated in `ApplicationPool2::Options::getStartCommand()`.
 
 The diagram shows that **`SpawningKit::Spawner::setConfigFromAppPoolOptions()`** is where the SpawningKit config is set. From there, you have access to an `ApplicationPool2::Options` object. That object contains the values of:
 
@@ -303,23 +312,27 @@ The diagram shows that **`SpawningKit::Spawner::setConfigFromAppPoolOptions()`**
  * `startupFile` (from user config or autodetected)
  * `startCommand` (auto calculated based on wrapper registry)
 
-So to access `app_supports_kuria_protocol` and `app_start_command`, you need to:
+### 4.3. How to access the `app_start_command` value from `setConfigFromAppPoolOptions()`
 
- 1. Add an `appSupportsKuriaProtocol` field to ApplicationPool2::Options.
+In this section, let's call the `ApplicationPool2::Options` object as follows: `poolOptions`.
 
-    There is already a `startCommand` field. We can use it after renaming this to `appStartCommand`. This is safe, see below.
+There is already a `poolOptions.startCommand` field. We should rename `poolOptions.startCommand` to `poolOptions.appStartCommand` (this is safe, see below). Then we should modify the flow so that the Core controller sets `poolOptions.startCommand`.
 
- 2. Modify the flow so that the Core controller sets those two fields.
+Yeah, the existing `poolOptions.startCommand` field is an oddball. It is safe to rename and reuse this field because it is only used by unit tests.
 
-> Yeah, the existing `startCommand` field is an oddball. It is safe to rename and reuse this field because it is only used by unit tests.
->
-> `ApplicationPool2::Options::getStartCommand()` skips the auto calculation if the `startCommand` field is already set. In the Core controller's `createNewPoolOptions()`, that field is set based on the `!~PASSENGER_START_COMMAND` header. But this is a mechanism reserved for future use that never actually got used. Nginx/Apache do not set this header: they don't have a config option for doing so.
->
-> The next section will suggest introducing a `passenger_app_start_command` option. So just rename the `!~PASSENGER_START_COMMAND` header to `!~PASSENGER_APP_START_COMMAND` and use the header for that option.
+`ApplicationPool2::Options::getStartCommand()` skips the auto calculation if `poolOptions.startCommand` is already set. In the Core controller's `createNewPoolOptions()`, that field is set based on the `!~PASSENGER_START_COMMAND` header. But this is a mechanism reserved for future use that never actually got used. Nginx/Apache do not set this header: they don't have a config option for doing so.
 
-### 4.3. New config options
+A later section will suggest introducing a `passenger_app_start_command` config option, which will cause `!~PASSENGER_APP_START_COMMAND` to be passed to the Core controller. So just modify the Core controller code that uses `!~PASSENGER_START_COMMAND`, and make it use `!~PASSENGER_APP_START_COMMAND` instead.
 
-We need to introduce the following new config options:
+### 4.4. How to access `app_supports_kuria_protocol` from `setConfigFromAppPoolOptions()`
+
+We should make `setConfigFromAppPoolOptions()` check Passengerfile.json directly.
+
+We could have chosen to have higher layers (such as the web server module) check for `app_supports_kuria_protocol` in Passengerfile.json, and then pass that information to lower layers, like how `app_type`'s value is passed down. But I see no reason why we should go through this trouble in case of `app_supports_kuria_protocol`. This value is not user-configurable and depends purely on Passengerfile.json.
+
+### 4.5. New config options
+
+We should introduce the following new config options:
 
   * Nginx:
 
@@ -334,9 +347,9 @@ We need to introduce the following new config options:
      - `app_start_command`
      - `app_supports_kuria_protocol`
 
-> Note: in the Standalone + builtin engine case you will need to introduce a `single_app_mode_app_start_command` config to the Core controller ConfigKit schema, in the same way `single_app_mode_app_type` is handled.
+> Note: in the Standalone + builtin engine case you will need to introduce a `single_app_mode_app_start_command`/`single_app_mode_app_supports_kuria_protocol` config to the Core controller ConfigKit schema, in the same way `single_app_mode_app_type` is handled.
 
-The value of `passenger_app_start_command` (and equivalent) will flow into `ApplicationPool2::Options.appStartCommand`. But according to the UX spec, Nginx and Apache should not need `passenger_app_start_command` if Passengerfile.json already contains `app_start_command`. How do we handle this?
+Making sure that the value of `passenger_app_start_command` (and equivalent) flows into `poolOptions.appStartCommand` is the easy part. But according to the UX spec, Nginx and Apache should not need `passenger_app_start_command` if Passengerfile.json already contains `app_start_command`. How do we handle this?
 
 Let's do this in the same way that the value of `appType` is autodetected if it isn't set by the user config:
 
@@ -347,28 +360,17 @@ Let's do this in the same way that the value of `appType` is autodetected if it 
 
  * In the Core's `initSingleAppMode()`, autodetect the value of `single_app_mode_app_start_command` if not set.
 
-What about `appSupportsKuriaProtocol`? That should be set to true if and only if Passengerfile.json contains `app_supports_kuria_protocol`. Again, let's do this in the same way as `appType`:
+### 4.6. Standalone::AppFinder
 
-TODO is this the right approach? doublecheck again "Setting the SpawningKit config"
-
- * Modify the `AppTypeDetector`'s Result struct and ensure that it contains the value of Passengerfile.json's `app_supports_kuria_protocol`.
- * In the Nginx/Apache module, autodetect it and set the `!~PASSENGER_APP_START_COMMAND` header based on that.
-
-   Mind the performance here. Parsing JSON is expensive so we don't want to do that on every request. You should look for a way to cache the result. The current caching mechanism using CachedFileStat assumes that the only expensive work done by the AppTypeDetector is stat()ing files, but that won't be true anymore.
-
-### Standalone::AppFinder
-
-Passenger Standalone's AppFinder class (written in Ruby) is another oddball that you need to deal with. This class is sort of a lightweight version of the C++ AppTypeDetector class and the WrapperRegistry combined.
+Passenger Standalone's AppFinder class (written in Ruby) is an oddball that we need to deal with. This class is sort of a lightweight version of the C++ AppTypeDetector class and the WrapperRegistry combined.
 
 Passenger Standalone uses AppFinder to detect whether a directory contains an app. The result is then used to raise an error if one tries to start Passenger Standalone in a non-app directory. Passenger Enterprise also uses AppFinder as part of the "mass deployment" feature.
 
-The key method is `#looks_like_app_directory?` which returns a boolean. It's similar to `AppTypeDetector::checkAppRoot()`: it checks whether any of the startup files in the WrapperRegistry exists in a given directory.
-
-...TODO
+The key method is `#looks_like_app_directory?` which returns a boolean. It's similar to `AppTypeDetector::checkAppRoot()`: it checks whether any of the startup files in the WrapperRegistry exists in a given directory. This method should return true as well if the `start_command` option is given.
 
 > It's too bad that we need to duplicate the C++ stuff here. In the future we should find a way to unify these, maybe by having Passenger Standalone outsource this work to a CLI invocation of the PassengerAgent. But then Passenger Standalone would have to ensure that the PassengerAgent is compiled, before it starts scanning app directories.
 
-### 4.4. Testing checklist
+### 4.7. Testing checklist
 
 Tests should be automated. There should be suitable unit and integration tests at the right levels.
 
