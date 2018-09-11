@@ -8,20 +8,22 @@ This document is meant for Passenger developers and contributors in order to get
 
 - [1. Why GLS?](#1-why-gls)
 - [2. What is GLS and how to get there?](#2-what-is-gls-and-how-to-get-there)
-    - [2.1. The basic architecture is language-agnostic: process manager and reverse proxy](#21-the-basic-architecture-is-language-agnostic-process-manager-and-reverse-proxy)
+    - [2.1. Language-agnostic basic architecture: process manager and reverse proxy](#21-language-agnostic-basic-architecture-process-manager-and-reverse-proxy)
     - [2.2. Application process spawning traditionally via wrappers](#22-application-process-spawning-traditionally-via-wrappers)
         - [2.2.1. Drawbacks](#221-drawbacks)
         - [2.2.2. Hardcoded list](#222-hardcoded-list)
     - [2.3. Recently introduced: non-wrapper approaches](#23-recently-introduced-non-wrapper-approaches)
-    - [2.4. Summary of spawning approaches](#24-summary-of-spawning-approaches)
-    - [2.5. Towards GLS](#25-towards-gls)
-        - [2.5.1. We won't market Kuria apps yet](#251-we-wont-market-kuria-apps-yet)
-        - [2.5.2. List of auto-supported not dynamically extensible](#252-list-of-auto-supported-not-dynamically-extensible)
+        - [2.3.1. How the generic approach works](#231-how-the-generic-approach-works)
+        - [2.3.2. How the Kuria approach works](#232-how-the-kuria-approach-works)
+    - [2.4. Towards GLS](#24-towards-gls)
+        - [2.4.1. Keeping Kuria support stealth in initial launch](#241-keeping-kuria-support-stealth-in-initial-launch)
+        - [2.4.2. List of auto-supported apps not dynamically extensible](#242-list-of-auto-supported-apps-not-dynamically-extensible)
 - [3. User experience](#3-user-experience)
     - [3.1. Generic apps](#31-generic-apps)
         - [3.1.1. User configured start command](#311-user-configured-start-command)
         - [3.1.2. Developer-provided start command: Passengerfile.json](#312-developer-provided-start-command-passengerfilejson)
     - [3.2. Kuria apps](#32-kuria-apps)
+        - [3.2.1. Kuria support indicator](#321-kuria-support-indicator)
 - [4. Implementation direction](#4-implementation-direction)
     - [4.1. Setting the SpawningKit config](#41-setting-the-spawningkit-config)
     - [4.2. How user config and autodetected values flow](#42-how-user-config-and-autodetected-values-flow)
@@ -57,25 +59,30 @@ Today Passenger helps more than 650.000 websites world-wide, such as Apple, Pixa
 
 TLDR:
 
- * Passenger 5.3 introduced a rewrite of the SpawningKit subsystem — the subsystem responsible for spawning application processes.
+ * [Passenger 5.3](https://blog.phusion.nl/2018/05/09/passenger-5-3-0/) introduced a rewrite of the SpawningKit subsystem — the subsystem responsible for spawning application processes.
  * This rewrite contains all the low-level machinery needed to spawn apps written in any language.
- * The rest of Passenger doesn't care what language an apps is written in, as long as they can communicate with the app.
+ * The rest of Passenger doesn't care what language an app is written in, as long as they can communicate with the app.
  * So to implement GLS, we "simply" need to connect the rest of Passenger with the new machinery.
- * In order to save time and release earlier, we're not going to expose all low-level machinery yet. We'll push out some of the less-important work to future releases.
+ * In order to save time and release earlier, we're not going to expose all low-level machinery and features yet. We'll prioritize the most important features and do the rest in a future release.
 
-But of course, the devil is in the details. For example, how we write the connections depends on the UX implications.
+But of course, the devil is in the details. For example, how we connect the low-level ⬌ high-level machinery depends on the UX implications.
 
-### 2.1. The basic architecture is language-agnostic: process manager and reverse proxy
+### 2.1. Language-agnostic basic architecture: process manager and reverse proxy
+
+<a href="https://github.com/FooBarWidget/gls-spec/blob/master/Passenger-SpawningKit%20interaction.png?raw=true">![SpawningKit config flow](https://github.com/FooBarWidget/gls-spec/blob/master/Passenger-SpawningKit%20interaction.png?raw=true)</a>
+<!-- <a href="https://github.com/FooBarWidget/gls-spec/blob/master/Passenger-SpawningKit%20interaction.png?raw=true">![SpawningKit config flow](Passenger-SpawningKit%20interaction.png)</a> -->
+
+> This simplified interaction diagram shows how Passenger outsources the task of spawning an app process to a subsystem named SpawningKit. The HTTP server and reverse proxy parts of Passenger don't care what language that process is written in, as long as it can communicate with that process over a socket.
 
 Passenger is basically a process manager and reverse proxy. It spawns application processes and makes them listen on a certain local port. Passenger sits in between app processes and HTTP clients and acts as a reverse proxy: it applies load balancing etc.
 
-This basic architecture does not care which languages apps are written in. As long as Passenger knows how to spawn an app process and how to make it listen on a certain port, Passenger can do its job.
+This basic architecture **does not care which languages apps are written in**. As long as Passenger knows how to spawn an app process and how to make it listen on a certain port, Passenger can do its job.
 
 ### 2.2. Application process spawning traditionally via wrappers
 
 The "how to spawn an app process" part is handled by a subsystem named SpawningKit. Support for the current languages (Ruby, Python, Node.js) is implemented through "wrappers". When we spawn an app process, we actually start the Ruby/Python/Node.js wrapper, which is written in the same language. The wrapper:
 
- 1. Reads arguments from Passenger (SpawningKit actually).
+ 1. Reads arguments from SpawningKit (whose values are passed by higher-level mechanisms in Passenger).
  2. Loads the target application and injects various behavior into the app.
  3. Sets up a local server socket.
  4. Reports the socket's port information back to SpawningKit.
@@ -93,56 +100,63 @@ The list of available wrappers is stored in the **wrapper registry**. The conten
 
 ### 2.3. Recently introduced: non-wrapper approaches
 
-> For more details, see [the SpawningKit README](https://github.com/phusion/passenger/tree/configkit_nested/src/agent/Core/SpawningKit#readme).
+> See [the SpawningKit README](https://github.com/phusion/passenger/tree/master/src/agent/Core/SpawningKit#readme) for more details on SpawningKit.
 
-SpawningKit has recently received a big overhaul that addresses both drawbacks. SpawningKit now supports two alternative approaches:
+SpawningKit has recently received a big overhaul that addresses both drawbacks of the wrapper-based approach. SpawningKit now supports two alternative approaches, so in total three kinds of apps are now supported:
 
- 1. A generic approach that works for all apps:
- 
-     1. The user supplies a command string which tells SpawningKit how the application can be started on a certain port.
-     2. SpawningKit looks for a free port on the system.
-     3. SpawningKit spawns a process using the given command string, substituting `$PORT` with the found free port.
-     4. SpawningKit waits until the port becomes in use. SpawningKit then considers the process to have successfully spawned.
+ 1. **Generic apps** (new!) — any kind of app (that can listen on a TCP port) can be supported through this approach, as long as one can specify a command string for starting it on a certain port.
 
- 2. An approach that does not use wrappers, but instead requires the application to have been manually modified to support **"Kuria"** — the SpawningKit protocol.
-
-    1. The user supplies a command string which tells SpawningKit how the application can be started. No port parameter is needed.
-    2. SpawningKit spawns a process using the given command string.
-    3. The app process detects (through an environment variable) that it is spawned by SpawningKit, and initiates the use of the Kuria protocol.
-    4. The app process finishes internal initialization, then listens on a random local port.
-    5. The app process reports this port, as well as a success indicator, back to SpawningKit through the Kuria protocol.
-
-SpawningKit did not do away with the old wrapper-based approach. That approach is still available.
-
-### 2.4. Summary of spawning approaches
-
-In summary, the current situation is that SpawningKit supports the following kinds of apps:
-
- 1. **Generic apps** — any kind of app can be supported through this approach, as long as one can specify a command string for starting it on a certain port.
-
- 2. **Kuria apps** — apps that have been manually modified to support the Kuria protocol. One needs to specify a command string for starting the app.
+ 2. **Kuria apps** (new!) — apps that have been manually modified to support the Kuria protocol. One needs to specify a command string for starting the app.
 
     The benefits compared to (1) is better startup error reporting and better performance.
 
- 3. **Auto-supported apps** — apps for which a wrapper is available. This wrapper speaks the Kuria protocol.
- 
-    The benefits compared to (2) is the developer doesn't need to manually modify the app, and doesn't need to supply a command string (hence "auto-supported").
+ 3. **Auto-supported apps**  — apps for which a wrapper is available. This wrapper speaks the Kuria protocol.
+
+    This is the "classic" wrapper-based approach, but it is not supported for merely backwards-compatibility reasons. The benefits compared to (2) is the developer doesn't need to manually modify the app, and doesn't need to supply a command string (hence "auto-supported").
     
     But sometimes, the user or developer may have to specify a startup file, if it differs from the convention. For example when a Ruby app's Rack entrypoint is not `config.ru`.
 
-### 2.5. Towards GLS
+#### 2.3.1. How the generic approach works
+
+How does the generic approach allow SpawningKit support nearly all apps? Here's how it works:
+
+ 1. The user supplies a command string which tells SpawningKit how the app can be started on a certain port.
+ 2. SpawningKit looks for a free port on the system.
+ 3. SpawningKit spawns a process using the given command string, substituting `$PORT` with the found free port.
+ 4. SpawningKit waits until the port becomes in use. SpawningKit then considers the process to have successfully spawned.
+
+This approach is similar to how the Heroku Procfile system works.
+
+#### 2.3.2. How the Kuria approach works
+
+This approach is similar to the generic approach works in that it does not use wrappers and instead requires a command string.
+
+There is one additional requirement: the app must have been manually modified to support **"Kuria"** — the SpawningKit protocol.
+
+ 1. The user supplies a command string which tells SpawningKit how the app can be started. No port parameter is needed.
+ 2. SpawningKit spawns a process using the given command string.
+ 3. The app process detects (through an environment variable) that it is spawned by SpawningKit, and initiates the use of the Kuria protocol.
+ 4. The app process finishes internal initialization, then listens on a random local port.
+ 5. The app process reports this port, as well as a success indicator, back to SpawningKit through the Kuria protocol.
+
+### 2.4. Towards GLS
+
+<a href="https://github.com/FooBarWidget/gls-spec/blob/master/Spawning%20approaches.png?raw=true">![SpawningKit config flow](https://github.com/FooBarWidget/gls-spec/blob/master/Spawning%20approaches.png?raw=true)</a>
+<!-- <a href="https://github.com/FooBarWidget/gls-spec/blob/master/Spawning%20approaches?raw=true">![SpawningKit config flow](Spawning%20approaches.png)</a> -->
 
 Even though SpawningKit internally supports all 3 approaches, Passenger currently only exposes user-visible mechanisms for the "auto-supported apps" approach. So we need to add mechanisms to allow the use of the "generic apps" and the "Kuria apps" approaches.
 
-#### 2.5.1. We won't market Kuria apps yet
+#### 2.4.1. Keeping Kuria support stealth in initial launch
 
-Let's do one thing at a time. When we initially launch GLS, we won't market Kuria apps yet. We'll do that later. And when we do we will also have to publish Kuria protocol specs.
+Implementing support for Kuria apps is not much more work compared to implementing support for generic apps (as is apparent from section "Implementation direction"). However, documenting the Kuria protocol and writing related documentation such as tutorials *do* take quite some time. Therefore, for the initial GLS launch, we should implement Kuria support, but keep it under the radar. We'll market Kuria in a future release.
 
-#### 2.5.2. List of auto-supported not dynamically extensible
+#### 2.4.2. List of auto-supported apps not dynamically extensible
 
 What about auto-supported apps? The list of wrappers is currently hardcoded. Do we want to allow the user to install more wrappers, similar to how one installs extra language syntax highlighting into an editor?
 
-The answer is no, at least for now. It's more work and it's not clear whether users will want such a feature. Instead, people will have to contribute a wrapper to be included in Passenger. We shall eventually release documentation on how to contribute a wrapper.
+Answer: no, not for now. The work required to make this work is much more than that of implementing Kuria support. It's also not clear whether users will want such a feature.
+
+For now, people will have to contribute a wrapper to be included in Passenger. We should eventually release documentation on how to contribute a wrapper.
 
 ## 3. User experience
 
@@ -150,7 +164,7 @@ How would things work from the user point of view?
 
 ### 3.1. Generic apps
 
-Let's say we have an app in /webapps/fooapp/foo. We want Passenger to require just two pieces of information:
+Let's say we have an application executable /webapps/fooapp/fooexe. We want Passenger to require just two pieces of information:
 
  1. The app's directory.
  2. A shell command string for starting the app on a certain port.
@@ -167,7 +181,7 @@ We want to allow two ways to specify the command string:
 
 #### 3.1.1. User configured start command
 
-The config `app_start_command` (and variants) should be used to tell Passenger that this is a generic app, and how to start it.
+The config `app_start_command` (and equivalents) should be used to tell Passenger that this is a generic app, and how to start it.
 
 Nginx example:
 
@@ -177,7 +191,7 @@ server {
     server_name foo.com;
     passenger_enabled on;
     passenger_app_root /webapps/fooapp;
-    passenger_app_start_command './foo --port=$PORT';
+    passenger_app_start_command './fooexe --port=$PORT';
 }
 ~~~
 
@@ -187,7 +201,7 @@ Apache example:
 <VirtualHost *:80>
     ServerName foo.com
     PassengerAppRoot /webapps/fooapp
-    PassengerAppStartCommand './foo --port=$PORT'
+    PassengerAppStartCommand './fooexe --port=$PORT'
 </VirtualHost>
 ~~~
 
@@ -195,7 +209,7 @@ Standalone example (Passengerfile.json):
 
 ~~~json
 {
-    "app_start_command": "./foo --port=$PORT"
+    "app_start_command": "./fooexe --port=$PORT"
 }
 ~~~
 
@@ -203,7 +217,7 @@ Standalone example (Passengerfile.json):
 
 The config `app_start_command` in Passengerfile.json (so basically the same as the above Standalone example) should be used as a mechanism for the app developer to specify that this is a generic app that should be started with a specific command.
 
-No changes in Standalone required (obviously). But if Nginx or Apache should check whether a Passengerfile.json exists in the app root and whether it contains `app_start_command`. If so then it'll use that.
+No changes in Standalone required (obviously). But Nginx and Apache should check whether a Passengerfile.json exists in the app root and whether it contains `app_start_command`. If so then it'll use that.
 
 Example Nginx config for an app with a Passengerfile.json containing `app_start_command`:
 
@@ -220,10 +234,10 @@ server {
 
 ### 3.2. Kuria apps
 
-Let's say we have a Go app in /webapps/fooapp/foo. This app has been modified by its developer for Kuria support. We want Passenger to require just three pieces of information:
+Let's say we have a Go app executable in /webapps/fooapp/fooexe. This app has been modified by its developer for Kuria support. We want Passenger to require just three pieces of information:
 
  1. The app's directory (like in the generic case).
- 2. A shell command string for starting the app on a certain port (like in the generic case).
+ 2. A shell command string for starting the app (like in the generic case). Unlike the generic case, no port parameter is required because the app will auto-detect whether it needs to initiate the Kuria protocol.
  3. An indicator that this app supports Kuria.
 
 Like in the generic case, we want to allow two ways to specify the command string:
@@ -233,19 +247,22 @@ Like in the generic case, we want to allow two ways to specify the command strin
 
 But this time the rationale is different:
 
-> One could argue that since the developer already modified the app, s/he may as well provide a start command in Passengerfile.json too. But that would make the start command fixed. The developer may want to allow the user to customize the start command with additional CLI flags (e.g. because the app does not support config files). Conversely, the user may want to override the default start command provided by the developer (e.g. for troubleshooting reasons).
+One could argue that since the developer already modified the app, s/he may as well provide a start command in Passengerfile.json too. But that would make the start command fixed. The developer may want to allow the user to customize the start command with additional CLI flags (e.g. because the app does not support config files). Conversely, the user may want to override the default start command provided by the developer (e.g. for troubleshooting reasons).
+
+#### 3.2.1. Kuria support indicator
 
 Where should the Kuria support indicator be set? I think it should be in Passengerfile.json, in the same way `app_start_command` in Passengerfile.json works:
 
 ~~~javascript
 {
-    // Omited `--port=$PORT` compared to the generic case. Not necessary because Kuria apps autodetect whether Passenger is requesting the Kuria protocol.
-    "app_start_command": "./myapp",
+    // Omitted `--port=$PORT` compared to the generic case. Not necessary because
+    // Kuria apps autodetect whether Passenger is requesting the Kuria protocol.
+    "app_start_command": "./fooexe",
     "app_supports_kuria_protocol": true
 }
 ~~~
 
-Nginx/Apache config then only requires `passenger_app_root`. Nginx/Apache sees that Passengerfile.json contains `app_supports_kuria_protocol: true` and autodetects it as such. Passenger will use the `app_start_command` specified in Passengerfile.json.
+The Nginx/Apache config then only requires `passenger_app_root`. Nginx/Apache sees that Passengerfile.json contains `app_supports_kuria_protocol: true` and autodetects it as such. Passenger will use the `app_start_command` specified in Passengerfile.json.
 
 ~~~nginx
 server {
@@ -266,7 +283,7 @@ server {
     passenger_app_root /webapps/fooapp;
 
     # Overridden start command:
-    passenger_app_start_command './myapp --dbpath=/home/db/dir';
+    passenger_app_start_command './fooexe --dbpath=/home/db/dir';
 }
 ~~~
 
@@ -274,7 +291,7 @@ server {
 
 ### 4.1. Setting the SpawningKit config
 
-The 3 approaches listed in "Summary of spawning approaches" correspond to the following SpawningKit config options:
+The 3 approaches listed in "Recently introduced: non-wrapper approaches" correspond to the following SpawningKit config options:
 
 | Approach       | SpawningKit config                                   |
 |----------------|------------------------------------------------------|
@@ -287,13 +304,17 @@ Passenger currently only configures SpawningKit to use the auto-supported approa
  * If Passengerfile.json sets `app_supports_kuria_protocol`, then:
     - Ensure `genericApp = false`
     - Ensure `startsUsingWrapper = false`
-    - Ensure `startCommand = (value from app_start_command config)`. If not provided, present an error.
- * Otherwise, if the `passenger_app_start_command` config (or equivalent) is set, or if Passengerfile.json sets `app_start_command` (even in case of Nginx/Apache), then:
+    - Ensure `startCommand = (value from integration mode-specific app_start_command config)`. If not provided, present an error.
+ * Otherwise, if the integration mode-specific `app_start_command` config is set, or if Passengerfile.json sets `app_start_command` (even in case of Nginx/Apache), then:
     - Ensure `genericApp = true`
-    - Ensure `startCommand = (value from app_start_command config)`. If not provided, present an error.
- * Otherwise, ensure `genericApp = false`.
+    - Ensure `startCommand = (value of app_start_command, from either integration-mode-specific config, or from Passengerfile.json)`. If neither provided, present an error.
+ * Otherwise, keep current behavior which is:
+    - Ensure `genericApp = false`
+    - Ensure `appType = (value from integration mode-specific app_type config, or autodetected)`
+    - Ensure `startupFile = (value from integration mode-specific startup_file config, or autodetected)`
+    - Ensure `startCommand` is set (later sections will explain how this works)
 
-Where do we set the SpawningKit config? And since we need to know the values of `app_supports_kuria_protocol` and `app_start_command`, how do we obtain those values from where we set the SpawningKit config? The following sections will guide you.
+Where do we set the SpawningKit config? And since we need to know the values of `app_supports_kuria_protocol` and `app_start_command` (the latter of which from two sources: integration mode-specific, and Passengerfile.json), how do we obtain those values from where we set the SpawningKit config? The following sections will guide you.
 
 ### 4.2. How user config and autodetected values flow
 
@@ -301,28 +322,30 @@ Before we describe how to access `app_supports_kuria_protocol` and `app_start_co
 
 `appType` and `startupFile` are set either based on user-provided config, or are autodetected, through this flow:
 
-<!-- <a href="https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true">![SpawningKit config flow](https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true)</a> -->
-<a href="https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true">![SpawningKit config flow](SpawningKit%20config%20flow.png)</a>
+<a href="https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true">![SpawningKit config flow](https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true)</a>
+<!-- <a href="https://github.com/FooBarWidget/gls-spec/blob/master/SpawningKit%20config%20flow.png?raw=true">![SpawningKit config flow](SpawningKit%20config%20flow.png)</a> -->
 
-`startCommand` is set based on `appType` and the **wrapper registry**. The wrapper registry is a hard-coded in-memory database which maps an app type name to various information, such as the name of the corresponding wrapper. The `startCommand` value is calculated in `ApplicationPool2::Options::getStartCommand()`.
+`startCommand` is set based on `appType` and the **wrapper registry**. The wrapper registry is a hard-coded in-memory database which maps an app type name to various information, such as the name of the corresponding wrapper. The final `startCommand` value is calculated in `ApplicationPool2::Options::getStartCommand()`.
 
 The diagram shows that **`SpawningKit::Spawner::setConfigFromAppPoolOptions()`** is where the SpawningKit config is set. From there, you have access to an `ApplicationPool2::Options` object. That object contains the values of:
 
  * `appType` (from user config or autodetected)
  * `startupFile` (from user config or autodetected)
- * `startCommand` (auto calculated based on wrapper registry)
+ * `startCommand` (from user config; but the final value passed to SpawningKit will be calculated with `getStartCommand()`)
 
 ### 4.3. How to access the `app_start_command` value from `setConfigFromAppPoolOptions()`
 
 In this section, let's call the `ApplicationPool2::Options` object as follows: `poolOptions`.
 
-There is already a `poolOptions.startCommand` field. We should rename `poolOptions.startCommand` to `poolOptions.appStartCommand` (this is safe, see below). Then we should modify the flow so that the Core controller sets `poolOptions.startCommand`.
+There is already a `poolOptions.startCommand` field. We should rename `poolOptions.startCommand` to `poolOptions.appStartCommand` (this is safe, see the notes below).
 
-Yeah, the existing `poolOptions.startCommand` field is an oddball. It is safe to rename and reuse this field because it is only used by unit tests.
+Then we should modify the flow so that the Core controller sets `poolOptions.startCommand`. We'll describe this in section "New config options".
 
-`ApplicationPool2::Options::getStartCommand()` skips the auto calculation if `poolOptions.startCommand` is already set. In the Core controller's `createNewPoolOptions()`, that field is set based on the `!~PASSENGER_START_COMMAND` header. But this is a mechanism reserved for future use that never actually got used. Nginx/Apache do not set this header: they don't have a config option for doing so.
-
-A later section will suggest introducing a `passenger_app_start_command` config option, which will cause `!~PASSENGER_APP_START_COMMAND` to be passed to the Core controller. So just modify the Core controller code that uses `!~PASSENGER_START_COMMAND`, and make it use `!~PASSENGER_APP_START_COMMAND` instead.
+> Yeah, the existing `poolOptions.startCommand` field is an oddball. It is safe to rename and reuse this field because it is only used by unit tests.
+>
+> `ApplicationPool2::Options::getStartCommand()` skips the auto calculation if `poolOptions.startCommand` is already set. In the Core controller's `createNewPoolOptions()`, that field is set based on the `!~PASSENGER_START_COMMAND` header. But this is a mechanism reserved for future use that never actually got used. Nginx/Apache do not set this header: they don't have a config option for doing so.
+>
+> A later section will suggest introducing a `passenger_app_start_command` config option, which will cause `!~PASSENGER_APP_START_COMMAND` to be passed to the Core controller. So just modify the Core controller code that uses `!~PASSENGER_START_COMMAND`, and make it use `!~PASSENGER_APP_START_COMMAND` instead.
 
 ### 4.4. How to access `app_supports_kuria_protocol` from `setConfigFromAppPoolOptions()`
 
@@ -347,7 +370,7 @@ We should introduce the following new config options:
      - `app_start_command`
      - `app_supports_kuria_protocol`
 
-> Note: in the Standalone + builtin engine case you will need to introduce a `single_app_mode_app_start_command`/`single_app_mode_app_supports_kuria_protocol` config to the Core controller ConfigKit schema, in the same way `single_app_mode_app_type` is handled.
+> Don't forget: in the Standalone + builtin engine case we should also introduce a `single_app_mode_app_start_command`/`single_app_mode_app_supports_kuria_protocol` config to the Core controller ConfigKit schema, in the same way `single_app_mode_app_type` is handled.
 
 Making sure that the value of `passenger_app_start_command` (and equivalent) flows into `poolOptions.appStartCommand` is the easy part. But according to the UX spec, Nginx and Apache should not need `passenger_app_start_command` if Passengerfile.json already contains `app_start_command`. How do we handle this?
 
@@ -362,13 +385,11 @@ Let's do this in the same way that the value of `appType` is autodetected if it 
 
 ### 4.6. Standalone::AppFinder
 
-Passenger Standalone's AppFinder class (written in Ruby) is an oddball that we need to deal with. This class is sort of a lightweight version of the C++ AppTypeDetector class and the WrapperRegistry combined.
-
-Passenger Standalone uses AppFinder to detect whether a directory contains an app. The result is then used to raise an error if one tries to start Passenger Standalone in a non-app directory. Passenger Enterprise also uses AppFinder as part of the "mass deployment" feature.
+Passenger Standalone's AppFinder class (written in Ruby) is sort of a lightweight version of the C++ AppTypeDetector class and the WrapperRegistry combined. Passenger Standalone uses AppFinder to detect whether a directory contains an app. The result is then used to raise an error if one tries to start Passenger Standalone in a non-app directory. Passenger Enterprise also uses AppFinder as part of the "mass deployment" feature.
 
 The key method is `#looks_like_app_directory?` which returns a boolean. It's similar to `AppTypeDetector::checkAppRoot()`: it checks whether any of the startup files in the WrapperRegistry exists in a given directory. This method should return true as well if the `start_command` option is given.
 
-> It's too bad that we need to duplicate the C++ stuff here. In the future we should find a way to unify these, maybe by having Passenger Standalone outsource this work to a CLI invocation of the PassengerAgent. But then Passenger Standalone would have to ensure that the PassengerAgent is compiled, before it starts scanning app directories.
+> It's too bad that we need to duplicate some of the C++ stuff here. In the future we should find a way to unify these, maybe by having Passenger Standalone outsource this work to a CLI invocation of the PassengerAgent. But then Passenger Standalone would have to ensure that the PassengerAgent is compiled, before it starts scanning app directories.
 
 ### 4.7. Testing checklist
 
@@ -388,10 +409,11 @@ Check each configuration against:
   * Standalone+Nginx
   * Standalone+Builtin
   * Standalone with Mass deployment
+  * Flying Passenger
 
 ## 5. Future work: extensions for more auto-supported apps
 
-> In section "Towards GLS" we said that we don't want to allow users to install extra wrappers, and that all wrappers shall be bundled with Passengers. This section explores how the UX could look like if we ever want to allow installing extra wrappers, and explores UX and implementation implications.
+> In section "Towards GLS" we said that we don't want to allow users to install extra wrappers, and that all wrappers shall be bundled with Passenger. This section explores how the UX could look like if we ever want to allow installing extra wrappers, and explores UX and implementation implications.
 
 Let's say we have an Elixir app in /webapps/fooapp/myapp.elixir, and a Perl app in /webapps/barapp/myapp.pl.
 
