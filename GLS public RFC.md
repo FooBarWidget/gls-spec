@@ -9,7 +9,7 @@ Passenger only supports a few programming languages right now. "Generic language
 This document is meant for Passenger users. We would like to get your feedback on these questions:
 
  * How could GLS benefit you? How should we change Passenger to address your use cases for today and for tomorrow?
- * Are the proposed mechanisms are viable?
+ * Are the proposed mechanisms viable?
  * Is the proposed UX desirable?
 
 Let us know by posting a comment!
@@ -154,4 +154,4 @@ If `force_max_concurrent_requests_per_process` is not specified then Passenger s
 
 ## 4. Tell us about your use cases
 
-What do you think of this proposal? What use cases would you use this for, and how can we make Passenger accomodate your use case better? Please let us know by contacting us or posting a comment!
+What do you think of this proposal? What use cases would you use this for, and how can we make Passenger accommodate your use case better? Please let us know by contacting us or posting a comment!
