@@ -17,17 +17,21 @@ TelemetryCollector class:
 
 Protocol:
 - Endpoint: https://anontelemetry.phusionpassenger.com/v1/collect.json
-- Request: {
-	"requests_handled": <number>,
-	"begin_time": <timestamp>,
-	"end_time": <timestamp>,
-	"edition": "oss" | "enterprise"
-}
-- Response (200, 400, 422, 500): {
-	"data_processed": <boolean>, // should client keep or throw away stats?
-	["backoff": <seconds>,] // when to send next data point?
-	["log_message": <string>] // to be logged by passenger
-}
+- Request:
+
+      {
+        "requests_handled": <number>,
+        "begin_time": <timestamp>,
+        "end_time": <timestamp>,
+        "edition": "oss" | "enterprise"
+      }
+- Response (200, 400, 422, 500):
+
+      {
+        "data_processed": <boolean>, // should client keep or throw away stats?
+        ["backoff": <seconds>,] // when to send next data point?
+        ["log_message": <string>] // to be logged by passenger
+      }
 
 Server:
 - Tables: oss_stats, enterprise_stats
