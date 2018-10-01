@@ -34,6 +34,6 @@ Server:
 	- date (unique)
 	- requests NUMERIC(32, 0)
 - on receiving a data point:
-	- maybe split a single data point into two date buckets
+	- maybe split a single data point into multiple date buckets
 	- upsert date bucket, increment requests
 - (future) every week, synchronize last month with google spreadsheets
