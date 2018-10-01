@@ -22,7 +22,7 @@ Let us know by posting a comment!
 - [3. User experience](#3-user-experience)
     - [3.1. User configured start command](#31-user-configured-start-command)
     - [3.2. Developer-provided start command: Passengerfile.json](#32-developer-provided-start-command-passengerfilejson)
-    - [Concurrency configuration](#concurrency-configuration)
+    - [3.3. Concurrency configuration](#33-concurrency-configuration)
 - [4. Tell us about your use cases](#4-tell-us-about-your-use-cases)
 
 <!-- /TOC -->
@@ -129,7 +129,7 @@ server {
 }
 ~~~
 
-### Concurrency configuration
+### 3.3. Concurrency configuration
 
 The user should also specify the config `force_max_concurrent_requests_per_process` (and other integration mode equivalents) in order to tell Passenger about the concurrency properties of the app.
 
