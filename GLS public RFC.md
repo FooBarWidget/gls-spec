@@ -71,7 +71,7 @@ We want to allow two ways to specify the command string:
 
  2. Through a Passengerfile.json supplied by the app's developer.
 
-    Rationale: developers may want to help users out by supplying a command string, even if they don't bother modifying the app's code for Kuria support.
+    Rationale: developers may want to help users out by supplying a default command string.
 
 ### 3.1. User configured start command
 
