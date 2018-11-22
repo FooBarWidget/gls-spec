@@ -3,12 +3,12 @@
 Goals:
 - Collect number of requests a Passenger instance made
 - Segmented by OSS/enterprise
-- Segmented by version [MODIFIED]
+- Segmented by version
 - maybe: collect feature usage? [MODIFIED]
 - OS en versie [MODIFIED]
 
 TelemetryCollector class:
-- First trigger in 0.5-3.5 hour [MODIFIED]
+- First trigger in 2-4 hour
 - Trigger before shutdown, timeout 2s
 - Time till next trigger is determined by server response
 	- If no server response, trigger every 6-9 hours (random to avoid thundering herd)
@@ -27,7 +27,7 @@ Protocol:
         "begin_time": <timestamp>,
         "end_time": <timestamp>,
         "edition": "oss" | "enterprise",
-        "version": <version> [MODIFIED]
+        "version": <version>
       }
 - Response (200, 400, 422, 500):
 
